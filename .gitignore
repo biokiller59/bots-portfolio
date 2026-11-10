@@ -3,5 +3,6 @@
 *.csv
 .env
 state.json
+*.log
 __pycache__/
 .pytest_cache/
