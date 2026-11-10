@@ -7,6 +7,7 @@ Small, finished examples of what I build for clients: Telegram bots, Discord bot
 | [telegram-booking-bot](telegram-booking-bot) | Clients book an appointment in a few taps; the owner gets notified and sees the day's schedule | aiogram 3, SQLite |
 | [web-scraper](web-scraper) | Collects a product catalogue (title, price, rating, stock, link) into Excel or CSV | requests, BeautifulSoup, openpyxl |
 | [discord-ticket-bot](discord-ticket-bot) | Members open a private support ticket with one button; staff reply and close it | discord.py 2 |
+| [order-monitor](order-monitor) | Watches public Telegram channels and forwards posts matching keywords to your Telegram | requests, BeautifulSoup, Bot API |
 
 ## Telegram booking bot
 
@@ -43,11 +44,22 @@ set DISCORD_TOKEN=<bot token>
 python discord-ticket-bot/bot.py
 ```
 
+## Order monitor
+
+- Channels in `channels.txt`, keywords in two regexes at the top of `monitor.py`
+- Checks every 5 minutes, never sends the same post twice, first start only sends posts from the last 12 hours
+- Put `BOT_TOKEN=...` in `order-monitor/.env`, run it, send `/start` to your bot
+
+```
+python order-monitor/monitor.py --dry-run   # print matches, no token needed
+python order-monitor/monitor.py
+```
+
 ## Setup
 
 ```
 pip install -r requirements.txt
-python -m pytest telegram-booking-bot web-scraper
+python -m pytest telegram-booking-bot web-scraper order-monitor
 ```
 
 ## Hire me

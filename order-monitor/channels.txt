@@ -1,0 +1,6 @@
+# One public Telegram channel per line (the part after t.me/). Checked 10.11.2026.
+FreelanceBay
+freelancetaverna
+freelance7
+freelancechoice
+workzillacom

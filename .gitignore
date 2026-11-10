@@ -2,5 +2,6 @@
 *.xlsx
 *.csv
 .env
+state.json
 __pycache__/
 .pytest_cache/
