@@ -46,7 +46,8 @@ python discord-ticket-bot/bot.py
 
 ## Order monitor
 
-- Channels in `channels.txt`, keywords in two regexes at the top of `monitor.py`
+- Channels in `channels.txt`, keywords in two regexes at the top of `monitor.py` (bots, scrapers, scripts, websites and landing pages, spreadsheet automation)
+- `/check` in the bot chat runs a check right away
 - Checks every 5 minutes, never sends the same post twice, first start only sends posts from the last 12 hours
 - Put `BOT_TOKEN=...` in `order-monitor/.env`, run it, send `/start` to your bot
 

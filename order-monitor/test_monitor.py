@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from monitor import new_matches, parse, wanted
+from monitor import Telegram, new_matches, parse, wanted
 
 HTML = """
 <div class="tgme_widget_message" data-post="chan/10">
@@ -33,6 +33,10 @@ def test_filter():
     assert not wanted("Удалённая работа менеджером")  # "работа" contains "бот"
     assert not wanted("Бот для ставок на спорт")
     assert not wanted("Обзванивать клиентов по скриптам")
+    assert wanted("Нужно сделать сайт-визитку для салона")
+    assert wanted("Сверстать лендинг по макету")
+    assert not wanted("Ищем SEO-специалиста для продвижения сайта")
+    assert not wanted("Ищем копирайтера, знание API плюс")
 
 
 def test_first_run_drops_old_posts_and_marks_everything_seen():
@@ -41,3 +45,13 @@ def test_first_run_drops_old_posts_and_marks_everything_seen():
     assert [p["id"] for p in found] == ["chan/10"]
     assert seen == {"chan/9", "chan/10", "chan/11"}
     assert new_matches(parse(HTML, "chan"), seen, first_run=False, now=NOW) == []
+
+
+def test_check_command_only_from_owner():
+    tg = Telegram("x")
+    batches = [[{"update_id": 5, "message": {"chat": {"id": 999}, "text": "/check"}},
+                {"update_id": 6, "message": {"chat": {"id": 1}, "text": "hi"}}],
+               [{"update_id": 7, "message": {"chat": {"id": 1}, "text": "/check"}}]]
+    tg.call = lambda method, **p: batches.pop(0)
+    assert tg.wait_for_check(chat_id=1, seconds=60)
+    assert tg.offset == 8

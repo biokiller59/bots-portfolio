@@ -21,9 +21,22 @@ POLL_SECONDS = 300
 FIRST_RUN_MAX_AGE = timedelta(hours=12)
 UA = {"User-Agent": "order-monitor/0.1 (personal job alerts)"}
 
-# \bбот keeps "работа" out; the lookbehinds drop call-centre "по скриптам" / "есть скрипты".
-WANT = re.compile(r"\bбот|\bbots?\b|парс|pars|scrap|python|питон|(?<!по )(?<!есть )скрипт|автоматиз|\bapi\b|discord|дискорд|selenium", re.I)
-SKIP = re.compile(r"казино|ставк|ставок|накрут|спам|форекс|forex|\b18\+", re.I)
+WANT = re.compile("|".join([
+    # bots, scrapers, scripts. \bбот keeps "работа" out; the lookbehinds drop call-centre "по скриптам".
+    r"\bбот", r"\bbots?\b", r"парс", r"pars", r"scrap", r"python", r"питон", r"(?<!по )(?<!есть )скрипт",
+    r"автоматиз", r"\bapi\b", r"интеграц", r"discord", r"дискорд", r"selenium", r"mini ?app",
+    # websites. Bare "сайт" is in every SEO/content post, so only "make/build a site" phrases.
+    r"(?:созда|разработ|сделать|сверстать|нужен|переделать|доработ)\w*\s+(?:\S+\s+){0,2}сайт",
+    r"лендинг", r"landing", r"в[её]рст", r"\bhtml", r"\bcss\b", r"javascript", r"фронтенд", r"frontend",
+    r"react", r"wordpress", r"вордпресс",
+    # spreadsheets automation
+    r"google ?sheets", r"гугл[ -]?таблиц", r"apps ?script", r"макрос", r"\bvba\b",
+]), re.I)
+SKIP = re.compile("|".join([
+    r"казино", r"ставк", r"ставок", r"накрут", r"спам", r"форекс", r"forex", r"\b18\+",
+    # vacancies for other roles that only mention automation/API/sites in passing
+    r"seo[-‑ ]?специалист", r"smm[-‑ ]?специалист", r"копирайтер", r"веб[-‑ ]?дизайнер", r"таргетолог", r"маркетолог",
+]), re.I)
 
 
 def load_env(path):
@@ -80,9 +93,11 @@ def new_matches(posts, seen, first_run, now):
 class Telegram:
     def __init__(self, token):
         self.base = f"https://api.telegram.org/bot{token}/"
+        self.offset = None
 
     def call(self, method, **params):
-        r = requests.post(self.base + method, json=params, timeout=30)
+        # long-polling getUpdates holds the request open for params["timeout"] seconds
+        r = requests.post(self.base + method, json=params, timeout=30 + params.get("timeout", 0))
         r.raise_for_status()
         return r.json()["result"]
 
@@ -92,6 +107,29 @@ class Telegram:
             if msg and msg.get("text", "").startswith("/start"):
                 return msg["chat"]["id"]
         return None
+
+    def wait_for_check(self, chat_id, seconds):
+        """Waits up to `seconds`; returns True as soon as the owner sends /check."""
+        deadline = time.monotonic() + seconds
+        while (left := deadline - time.monotonic()) > 0:
+            try:
+                updates = self.call("getUpdates", offset=self.offset, timeout=max(1, int(min(left, 50))))
+            except requests.RequestException as e:
+                print(f"getUpdates failed: {e}", file=sys.stderr)
+                time.sleep(5)
+                continue
+            for upd in updates:
+                self.offset = upd["update_id"] + 1
+                msg = upd.get("message") or {}
+                if msg.get("chat", {}).get("id") == chat_id and msg.get("text", "").startswith("/check"):
+                    return True
+        return False
+
+    def say(self, chat_id, text):
+        try:
+            self.call("sendMessage", chat_id=chat_id, text=text)
+        except requests.RequestException as e:
+            print(f"send failed: {e}", file=sys.stderr)
 
     def send(self, chat_id, post):
         body = post["text"] if len(post["text"]) < 3500 else post["text"][:3500] + "…"
@@ -147,19 +185,26 @@ def main():
         chat_id = tg.find_chat()
         if not chat_id:
             time.sleep(5)
-    tg.call("sendMessage", chat_id=chat_id, text="Order monitor is running. New matching orders will appear here.")
+    tg.call("setMyCommands", commands=[{"command": "check", "description": "Проверить каналы сейчас"}])
+    tg.call("sendMessage", chat_id=chat_id, text="Order monitor is running. New matching orders will appear here. /check — проверить сейчас.")
 
     first_run = not seen
+    manual = False
     while True:
-        for post in scan(seen, first_run):
+        if manual:
+            tg.say(chat_id, "Проверяю каналы…")
+        found = scan(seen, first_run)
+        for post in found:
             try:
                 tg.send(chat_id, post)
             except requests.RequestException as e:
                 print(f"send failed: {e}", file=sys.stderr)
             time.sleep(1)
+        if manual and not found:
+            tg.say(chat_id, "Новых подходящих заказов нет.")
         first_run = False
         save_state(chat_id, seen)
-        time.sleep(POLL_SECONDS)
+        manual = tg.wait_for_check(chat_id, POLL_SECONDS)
 
 
 if __name__ == "__main__":
