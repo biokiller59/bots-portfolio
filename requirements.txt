@@ -1,0 +1,5 @@
+aiogram>=3.0
+discord.py>=2.3
+requests
+beautifulsoup4
+openpyxl
