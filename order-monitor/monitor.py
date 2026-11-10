@@ -232,9 +232,12 @@ class Telegram:
         body = post["text"] if len(post["text"]) < 3500 else post["text"][:3500] + "…"
         self.call("sendMessage", chat_id=chat_id, text=f"{body}\n\n{post['link']}",
                   disable_web_page_preview=True)
+        self.send_reply(chat_id, post, "Готовый отклик (поправь цену и срок):")
+
+    def send_reply(self, chat_id, post, title):
         # <pre> gives a one-tap copy button in Telegram
         self.call("sendMessage", chat_id=chat_id, parse_mode="HTML", disable_web_page_preview=True,
-                  text=f"Готовый отклик (поправь цену и срок):\n<pre>{html.escape(reply_for(post['text']))}</pre>")
+                  text=f"{html.escape(title)}\n<pre>{html.escape(reply_for(post['text']))}</pre>")
 
 
 def channels():
@@ -312,9 +315,11 @@ def main():
             tg.say(chat_id, "Собираю заказы за сутки со всех каналов, это ~30 секунд…")
             now = datetime.now(timezone.utc)
             posts = [p for _, chunk in fetch_all() for p in chunk]
+            top = top_orders(posts, now)
             try:
-                tg.call("sendMessage", chat_id=chat_id, text=top_text(top_orders(posts, now), now),
-                        disable_web_page_preview=True)
+                tg.call("sendMessage", chat_id=chat_id, text=top_text(top, now), disable_web_page_preview=True)
+                for i, p in enumerate(top, 1):
+                    tg.send_reply(chat_id, p, f"№{i} — отклик для {p['link']} (поправь цену и срок):")
             except requests.RequestException as e:
                 print(f"send failed: {e}", file=sys.stderr)
             cmd = tg.wait_for_command(chat_id, interval)

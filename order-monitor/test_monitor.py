@@ -95,6 +95,14 @@ def test_top_orders_ranks_dedupes_and_drops_old():
     assert len(top_text(top_orders([post(i, "Нужен бот " + "x" * 500 + str(i), 1) for i in range(30)], NOW), NOW)) < 4096
 
 
+def test_send_reply_escapes_and_picks_topic():
+    tg = Telegram("x")
+    sent = []
+    tg.call = lambda method, **p: sent.append(p)
+    tg.send_reply(1, {"text": "Спарсить <товары> с Ozon"}, "№1 — отклик для https://t.me/c/1:")
+    assert sent[0]["parse_mode"] == "HTML" and "<pre>" in sent[0]["text"] and "парсер" in sent[0]["text"]
+
+
 def test_commands_only_from_owner():
     tg = Telegram("x")
     batches = [[{"update_id": 5, "message": {"chat": {"id": 999}, "text": "/live"}},
