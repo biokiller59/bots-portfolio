@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
-from monitor import Telegram, new_matches, parse, reply_for, wanted
+from datetime import timedelta
+
+from monitor import Telegram, budget_usd, new_matches, parse, reply_for, top_orders, top_text, wanted
 
 HTML = """
 <div class="tgme_widget_message" data-post="chan/10">
@@ -65,6 +67,32 @@ def test_new_channel_only_sends_recent_posts(monkeypatch):
     monkeypatch.setattr(monitor, "datetime", type("D", (), {"now": staticmethod(lambda tz: NOW)}))
     found = monitor.scan({"other/1"}, first_run=False)
     assert [p["id"] for p in found] == ["chan/10"]  # chan/9 is 9 days old
+
+
+def test_budget_usd():
+    assert round(budget_usd("Бюджет 5000 руб")) == 56
+    assert budget_usd("Плачу 50$") == 50
+    assert round(budget_usd("до 15к ₽")) == 167
+    assert budget_usd("$ 30 за работу") == 30
+    assert round(budget_usd("100 eur")) == 110
+    assert budget_usd("Нужен бот, цена договорная") == 0
+
+
+def test_top_orders_ranks_dedupes_and_drops_old():
+    def post(i, text, hours_ago):
+        return {"id": f"c/{i}", "text": text, "date": NOW - timedelta(hours=hours_ago), "link": f"https://t.me/c/{i}"}
+    posts = [
+        post(1, "Нужен Telegram-бот, бюджет 10000 руб, пишите @client_one", 3),
+        post(2, "Нужен Telegram-бот, бюджет 10000 руб, пишите @client_one", 2),  # repost in another channel
+        post(3, "Нужен бот для записи", 1),
+        post(4, "Парсер сайта в Excel, 200$", 30),  # older than 24 h
+        post(5, "Ищем SMM-специалиста", 1),  # not our topic
+    ]
+    top = top_orders(posts, NOW)
+    assert [p["id"] for p in top] == ["c/1", "c/3"]
+    text = top_text(top, NOW)
+    assert "~111 $" in text and "https://t.me/c/3" in text
+    assert len(top_text(top_orders([post(i, "Нужен бот " + "x" * 500 + str(i), 1) for i in range(30)], NOW), NOW)) < 4096
 
 
 def test_commands_only_from_owner():

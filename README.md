@@ -47,7 +47,7 @@ python discord-ticket-bot/bot.py
 ## Order monitor
 
 - Channels in `channels.txt`, keywords in two regexes at the top of `monitor.py` (bots, scrapers, scripts, websites and landing pages, spreadsheet automation)
-- `/check` in the bot chat runs a check right away; `/live` checks every 30 seconds, `/normal` goes back to every 5 minutes
+- `/check` in the bot chat runs a check right away; `/live` checks every 30 seconds, `/normal` goes back to every 5 minutes; `/top` sends the 10 best orders of the last 24 hours, ranked by budget, topic, contact and freshness (vacancies and duplicates dropped)
 - Each order comes with a ready reply for its topic (Telegram bot, Discord bot, scraper, website, spreadsheets, other), one tap to copy
 - Checks every 5 minutes, never sends the same post twice, first start only sends posts from the last 12 hours
 - Put `BOT_TOKEN=...` in `order-monitor/.env`, run it, send `/start` to your bot

@@ -20,7 +20,8 @@ HERE = Path(__file__).parent
 STATE = HERE / "state.json"
 POLL_SECONDS = 300
 LIVE_SECONDS = 30  # /live mode; one scan of 5 channels already takes ~10 s, so going lower gains nothing
-COMMANDS = {"/check", "/live", "/normal"}
+COMMANDS = {"/check", "/live", "/normal", "/top"}
+TOP_MAX_AGE = timedelta(hours=24)
 FIRST_RUN_MAX_AGE = timedelta(hours=12)
 UA = {"User-Agent": "order-monitor/0.1 (personal job alerts)"}
 
@@ -75,6 +76,63 @@ def reply_for(text):
     """Ready-to-send reply for an order, picked by topic."""
     body = next((r for pattern, r in TOPICS if re.search(pattern, text, re.I)), GENERIC)
     return body + TAIL
+
+
+# "5000 руб", "15к ₽", "50$", "$ 50", "100 usd"
+MONEY = re.compile(r"(\d[\d\s]{0,6}(?:[.,]\d+)?)\s*(к|k|тыс\.?)?\s*(₽|руб|р\b|\$|usd|долл|€|eur)|(\$)\s*(\d+)", re.I)
+VACANCY = re.compile(r"в штат|полн\w* (?:день|занятост)|full[- ]?time|senior|middle|опыт от [2-9]|в офис", re.I)
+CONTACT = re.compile(r"@\w{4,}|t\.me/\w|пиши|в лс|в личк", re.I)
+RUB_PER_USD = 90
+
+
+def budget_usd(text):
+    """Biggest amount mentioned in the post, in dollars; 0 if none."""
+    best = 0
+    for m in MONEY.finditer(text):
+        if m.group(5):
+            usd = float(m.group(5))
+        else:
+            usd = float(re.sub(r"\s", "", m.group(1)).replace(",", "."))
+            if m.group(2):
+                usd *= 1000
+            cur = m.group(3).lower()
+            if cur in ("€", "eur"):
+                usd *= 1.1
+            elif cur not in ("$", "usd", "долл"):
+                usd /= RUB_PER_USD
+        best = max(best, usd)
+    return best
+
+
+def score(post, now):
+    """Higher is better: budget, a topic we have a ready example for, a contact; minus age and full-time vacancies."""
+    text = post["text"]
+    s = min(budget_usd(text), 200) / 10  # up to 20 points; huge budgets are usually team projects anyway
+    s += 10 if any(re.search(p, text, re.I) for p, _ in TOPICS) else 0
+    s += 3 if CONTACT.search(text) else 0
+    s -= 15 if VACANCY.search(text) else 0
+    s -= (now - post["date"]).total_seconds() / 7200  # -1 point per 2 hours
+    return s
+
+
+# shortcut: t.me/s shows ~20 last posts per channel and RUB_PER_USD is fixed; page back with ?before= / fetch a rate if that matters.
+def top_orders(posts, now, n=10):
+    fresh = [p for p in posts if now - p["date"] <= TOP_MAX_AGE and wanted(p["text"])]
+    unique = {}
+    for p in fresh:  # aggregator channels repost the same order, keep one copy
+        unique.setdefault(re.sub(r"\W+", "", p["text"].lower())[:80], p)
+    return sorted(unique.values(), key=lambda p: score(p, now), reverse=True)[:n]
+
+
+def top_text(posts, now):
+    if not posts:
+        return "За последние 24 часа подходящих заказов нет."
+    lines = ["Топ-10 заказов за 24 часа (бюджет, тема, контакт, свежесть):"]
+    for i, p in enumerate(posts, 1):
+        money = budget_usd(p["text"])
+        first = " ".join(p["text"].split())[:160]
+        lines.append(f"\n{i}. {'~%d $ · ' % money if money else ''}{p['date'].astimezone():%d.%m %H:%M}\n{first}…\n{p['link']}")
+    return "\n".join(lines)
 
 
 def load_env(path):
@@ -196,16 +254,22 @@ def save_state(chat_id, seen):
     STATE.write_text(json.dumps({"chat_id": chat_id, "seen": sorted(seen)}), encoding="utf-8")
 
 
-def scan(seen, first_run):
-    found = []
+def fetch_all():
+    """Yields (channel, posts) for every channel in channels.txt, skipping ones that fail."""
     for ch in channels():
-        # a channel just added to channels.txt gets the same 12-hour limit as a first run
-        fresh = first_run or not any(i.startswith(ch + "/") for i in seen)
         try:
-            found += new_matches(fetch(ch), seen, fresh, datetime.now(timezone.utc))
+            yield ch, fetch(ch)
         except requests.RequestException as e:
             print(f"{ch}: {e}", file=sys.stderr)
         time.sleep(2)
+
+
+def scan(seen, first_run):
+    found = []
+    for ch, posts in fetch_all():
+        # a channel just added to channels.txt gets the same 12-hour limit as a first run
+        fresh = first_run or not any(i.startswith(ch + "/") for i in seen)
+        found += new_matches(posts, seen, fresh, datetime.now(timezone.utc))
     return found
 
 
@@ -233,14 +297,28 @@ def main():
         {"command": "check", "description": "Проверить каналы сейчас"},
         {"command": "live", "description": f"Постоянное сканирование (каждые {LIVE_SECONDS} с)"},
         {"command": "normal", "description": "Обычный режим (раз в 5 минут)"},
+        {"command": "top", "description": "10 лучших заказов за 24 часа"},
     ])
     tg.call("sendMessage", chat_id=chat_id, text="Order monitor is running. New matching orders will appear here. "
-            "/check — проверить сейчас, /live — постоянное сканирование, /normal — раз в 5 минут.")
+            "/check — проверить сейчас, /live — постоянное сканирование, /normal — раз в 5 минут, "
+            "/top — 10 лучших заказов за сутки.")
 
     # shortcut: live mode is not saved, a restart goes back to 5 minutes; store it in state.json if that annoys.
     first_run = not seen
     interval, cmd = POLL_SECONDS, None
     while True:
+        if cmd == "/top":
+            # shortcut: /top restarts the wait, so the next regular scan comes a full interval later.
+            tg.say(chat_id, "Собираю заказы за сутки со всех каналов, это ~30 секунд…")
+            now = datetime.now(timezone.utc)
+            posts = [p for _, chunk in fetch_all() for p in chunk]
+            try:
+                tg.call("sendMessage", chat_id=chat_id, text=top_text(top_orders(posts, now), now),
+                        disable_web_page_preview=True)
+            except requests.RequestException as e:
+                print(f"send failed: {e}", file=sys.stderr)
+            cmd = tg.wait_for_command(chat_id, interval)
+            continue
         if cmd == "/live":
             interval = LIVE_SECONDS
             tg.say(chat_id, f"Постоянное сканирование включено: проверяю каждые {LIVE_SECONDS} секунд. /normal — выключить.")
