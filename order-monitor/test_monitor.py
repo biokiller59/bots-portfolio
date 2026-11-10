@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from monitor import Telegram, new_matches, parse, wanted
+from monitor import Telegram, new_matches, parse, reply_for, wanted
 
 HTML = """
 <div class="tgme_widget_message" data-post="chan/10">
@@ -39,6 +39,15 @@ def test_filter():
     assert not wanted("Ищем копирайтера, знание API плюс")
 
 
+def test_reply_picks_topic():
+    assert "Discord-бота" in reply_for("Нужен бот для Discord сервера")  # Discord beats generic "бот"
+    assert "парсер" in reply_for("Спарсить товары с Ozon")
+    assert "сайт" in reply_for("Сверстать лендинг")
+    assert "Telegram-бота" in reply_for("Нужен бот для записи")
+    assert "Python" in reply_for("Интеграция с API CRM")
+    assert "github.com" in reply_for("что угодно")
+
+
 def test_first_run_drops_old_posts_and_marks_everything_seen():
     seen = set()
     found = new_matches(parse(HTML, "chan"), seen, first_run=True, now=NOW)
@@ -47,11 +56,11 @@ def test_first_run_drops_old_posts_and_marks_everything_seen():
     assert new_matches(parse(HTML, "chan"), seen, first_run=False, now=NOW) == []
 
 
-def test_check_command_only_from_owner():
+def test_commands_only_from_owner():
     tg = Telegram("x")
-    batches = [[{"update_id": 5, "message": {"chat": {"id": 999}, "text": "/check"}},
+    batches = [[{"update_id": 5, "message": {"chat": {"id": 999}, "text": "/live"}},
                 {"update_id": 6, "message": {"chat": {"id": 1}, "text": "hi"}}],
-               [{"update_id": 7, "message": {"chat": {"id": 1}, "text": "/check"}}]]
+               [{"update_id": 7, "message": {"chat": {"id": 1}, "text": "/live@testbot"}}]]
     tg.call = lambda method, **p: batches.pop(0)
-    assert tg.wait_for_check(chat_id=1, seconds=60)
+    assert tg.wait_for_command(chat_id=1, seconds=60) == "/live"
     assert tg.offset == 8

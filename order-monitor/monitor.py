@@ -5,6 +5,7 @@ run `python monitor.py`, then send /start to your bot once.
 Without a token: `python monitor.py --dry-run` prints the matches and exits.
 """
 import argparse
+import html
 import json
 import re
 import sys
@@ -18,6 +19,8 @@ from bs4 import BeautifulSoup
 HERE = Path(__file__).parent
 STATE = HERE / "state.json"
 POLL_SECONDS = 300
+LIVE_SECONDS = 30  # /live mode; one scan of 5 channels already takes ~10 s, so going lower gains nothing
+COMMANDS = {"/check", "/live", "/normal"}
 FIRST_RUN_MAX_AGE = timedelta(hours=12)
 UA = {"User-Agent": "order-monitor/0.1 (personal job alerts)"}
 
@@ -37,6 +40,41 @@ SKIP = re.compile("|".join([
     # vacancies for other roles that only mention automation/API/sites in passing
     r"seo[-‑ ]?специалист", r"smm[-‑ ]?специалист", r"копирайтер", r"веб[-‑ ]?дизайнер", r"таргетолог", r"маркетолог",
 ]), re.I)
+
+
+PORTFOLIO = "https://github.com/biokiller59/bots-portfolio"
+TAIL = (f"\nОплата 50/50: половина до начала, вторая после видео, где всё работает. "
+        f"Отдаю исходный код и инструкцию, 7 дней бесплатных правок.\nПримеры: {PORTFOLIO}")
+# First matching topic wins, so the specific ones (Discord, parser) go before the generic "бот".
+TOPICS = [
+    (r"discord|дискорд", "Здравствуйте! Сделаю Discord-бота. Есть готовый пример — бот тикетов: приватный канал поддержки одной кнопкой.\n"
+     "Уточню: 1) какие команды и роли нужны? 2) где бот будет работать — ваш сервер или нужен совет по хостингу?\n"
+     "Оценка: 20–40 $, срок 1–3 дня."),
+    (r"парс|pars|scrap|selenium|собрать данные|выгруз", "Здравствуйте! Сделаю парсер. Есть готовый пример — сбор каталога (название, цена, наличие, ссылка) в Excel со всех страниц.\n"
+     "Уточню: 1) какой сайт и какие поля собирать? 2) нужен разовый сбор или по расписанию?\n"
+     "Оценка: 10–30 $, срок 1–2 дня."),
+    (r"сайт|лендинг|landing|в[её]рст|html|css|javascript|фронтенд|frontend|react|wordpress|вордпресс",
+     "Здравствуйте! Сделаю сайт: лендинг или сайт-визитку, адаптивно под телефон.\n"
+     "Уточню: 1) есть макет или пример сайта, который нравится? 2) тексты и фото готовы, нужен ли домен и хостинг?\n"
+     "Оценка: 25–60 $, срок 2–4 дня."),
+    (r"google ?sheets|гугл[ -]?таблиц|apps ?script|макрос|\bvba\b|excel|эксел",
+     "Здравствуйте! Сделаю автоматизацию таблиц (Google Таблицы / Excel): формулы, скрипты, выгрузки, связь с другими сервисами.\n"
+     "Уточню: 1) пришлите пример таблицы и что должно происходить автоматически. 2) как часто это нужно запускать?\n"
+     "Оценка: 10–30 $, срок 1–2 дня."),
+    (r"\bбот|\bbots?\b|mini ?app", "Здравствуйте! Сделаю Telegram-бота. Есть готовый пример — бот записи клиентов: услуга → день → время, "
+     "без двойных записей, уведомления владельцу.\n"
+     "Уточню: 1) какие функции нужны (меню, заказы, оплата, админка)? 2) где бот будет работать — ваш сервер или нужен совет по хостингу?\n"
+     "Оценка: 20–50 $, срок 2–4 дня."),
+]
+GENERIC = ("Здравствуйте! Сделаю на Python: скрипты, интеграции через API, задачи по расписанию.\n"
+           "Уточню: 1) что именно должно происходить и откуда берутся данные? 2) где это будет запускаться?\n"
+           "Оценка: от 10 $, срок назову после уточнений.")
+
+
+def reply_for(text):
+    """Ready-to-send reply for an order, picked by topic."""
+    body = next((r for pattern, r in TOPICS if re.search(pattern, text, re.I)), GENERIC)
+    return body + TAIL
 
 
 def load_env(path):
@@ -108,8 +146,8 @@ class Telegram:
                 return msg["chat"]["id"]
         return None
 
-    def wait_for_check(self, chat_id, seconds):
-        """Waits up to `seconds`; returns True as soon as the owner sends /check."""
+    def wait_for_command(self, chat_id, seconds):
+        """Waits up to `seconds`; returns the owner's command (/check, /live, /normal) as soon as one arrives."""
         deadline = time.monotonic() + seconds
         while (left := deadline - time.monotonic()) > 0:
             try:
@@ -121,9 +159,10 @@ class Telegram:
             for upd in updates:
                 self.offset = upd["update_id"] + 1
                 msg = upd.get("message") or {}
-                if msg.get("chat", {}).get("id") == chat_id and msg.get("text", "").startswith("/check"):
-                    return True
-        return False
+                cmd = msg.get("text", "").split("@")[0].strip()  # "/check@MyBot" in groups
+                if msg.get("chat", {}).get("id") == chat_id and cmd in COMMANDS:
+                    return cmd
+        return None
 
     def say(self, chat_id, text):
         try:
@@ -135,6 +174,9 @@ class Telegram:
         body = post["text"] if len(post["text"]) < 3500 else post["text"][:3500] + "…"
         self.call("sendMessage", chat_id=chat_id, text=f"{body}\n\n{post['link']}",
                   disable_web_page_preview=True)
+        # <pre> gives a one-tap copy button in Telegram
+        self.call("sendMessage", chat_id=chat_id, parse_mode="HTML", disable_web_page_preview=True,
+                  text=f"Готовый отклик (поправь цену и срок):\n<pre>{html.escape(reply_for(post['text']))}</pre>")
 
 
 def channels():
@@ -172,7 +214,7 @@ def main():
 
     if args.dry_run:
         for p in scan(set(), first_run=True):
-            print(f"--- {p['date']:%d.%m %H:%M} {p['link']}\n{p['text'][:300]}\n")
+            print(f"--- {p['date']:%d.%m %H:%M} {p['link']}\n{p['text'][:300]}\n>>> {reply_for(p['text'])}\n")
         return
 
     token = load_env(HERE / ".env").get("BOT_TOKEN")
@@ -185,12 +227,25 @@ def main():
         chat_id = tg.find_chat()
         if not chat_id:
             time.sleep(5)
-    tg.call("setMyCommands", commands=[{"command": "check", "description": "Проверить каналы сейчас"}])
-    tg.call("sendMessage", chat_id=chat_id, text="Order monitor is running. New matching orders will appear here. /check — проверить сейчас.")
+    tg.call("setMyCommands", commands=[
+        {"command": "check", "description": "Проверить каналы сейчас"},
+        {"command": "live", "description": f"Постоянное сканирование (каждые {LIVE_SECONDS} с)"},
+        {"command": "normal", "description": "Обычный режим (раз в 5 минут)"},
+    ])
+    tg.call("sendMessage", chat_id=chat_id, text="Order monitor is running. New matching orders will appear here. "
+            "/check — проверить сейчас, /live — постоянное сканирование, /normal — раз в 5 минут.")
 
+    # shortcut: live mode is not saved, a restart goes back to 5 minutes; store it in state.json if that annoys.
     first_run = not seen
-    manual = False
+    interval, cmd = POLL_SECONDS, None
     while True:
+        if cmd == "/live":
+            interval = LIVE_SECONDS
+            tg.say(chat_id, f"Постоянное сканирование включено: проверяю каждые {LIVE_SECONDS} секунд. /normal — выключить.")
+        elif cmd == "/normal":
+            interval = POLL_SECONDS
+            tg.say(chat_id, "Обычный режим: проверяю раз в 5 минут.")
+        manual = cmd == "/check"
         if manual:
             tg.say(chat_id, "Проверяю каналы…")
         found = scan(seen, first_run)
@@ -204,7 +259,7 @@ def main():
             tg.say(chat_id, "Новых подходящих заказов нет.")
         first_run = False
         save_state(chat_id, seen)
-        manual = tg.wait_for_check(chat_id, POLL_SECONDS)
+        cmd = tg.wait_for_command(chat_id, interval)
 
 
 if __name__ == "__main__":
