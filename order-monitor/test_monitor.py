@@ -56,6 +56,17 @@ def test_first_run_drops_old_posts_and_marks_everything_seen():
     assert new_matches(parse(HTML, "chan"), seen, first_run=False, now=NOW) == []
 
 
+def test_new_channel_only_sends_recent_posts(monkeypatch):
+    import monitor
+    monkeypatch.setattr(monitor, "channels", lambda: ["chan"])
+    posts = parse(HTML, "chan")
+    monkeypatch.setattr(monitor, "fetch", lambda ch: posts)
+    monkeypatch.setattr(monitor.time, "sleep", lambda s: None)
+    monkeypatch.setattr(monitor, "datetime", type("D", (), {"now": staticmethod(lambda tz: NOW)}))
+    found = monitor.scan({"other/1"}, first_run=False)
+    assert [p["id"] for p in found] == ["chan/10"]  # chan/9 is 9 days old
+
+
 def test_commands_only_from_owner():
     tg = Telegram("x")
     batches = [[{"update_id": 5, "message": {"chat": {"id": 999}, "text": "/live"}},

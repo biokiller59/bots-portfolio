@@ -4,3 +4,14 @@ freelancetaverna
 freelance7
 freelancechoice
 workzillacom
+# Added 11.11.2026: fa_chatbots and fa_sites have the most bot/site orders, the rest are mixed.
+fa_chatbots
+fa_sites
+webdesign_jobs
+zakazy_it
+frilans
+workk_on
+devjobs
+python_vakansii_jobs
+remotejobss
+freelancce

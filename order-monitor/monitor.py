@@ -199,8 +199,10 @@ def save_state(chat_id, seen):
 def scan(seen, first_run):
     found = []
     for ch in channels():
+        # a channel just added to channels.txt gets the same 12-hour limit as a first run
+        fresh = first_run or not any(i.startswith(ch + "/") for i in seen)
         try:
-            found += new_matches(fetch(ch), seen, first_run, datetime.now(timezone.utc))
+            found += new_matches(fetch(ch), seen, fresh, datetime.now(timezone.utc))
         except requests.RequestException as e:
             print(f"{ch}: {e}", file=sys.stderr)
         time.sleep(2)
